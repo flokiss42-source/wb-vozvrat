@@ -4,7 +4,7 @@
   "description": "Локальный аудит финансовых отчётов продавца Wildberries",
   "type": "module",
   "bin": { "wb-vozvrat": "./src/cli.js" },
-  "scripts": { "test": "node --test", "audit": "node src/cli.js" },
+  "scripts": { "test": "node --test", "audit": "node src/cli.js", "audit:api": "node src/api-cli.js" },
   "engines": { "node": ">=20" },
   "license": "AGPL-3.0-only"
 }
