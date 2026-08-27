@@ -61,3 +61,45 @@ export async function fetchStocks({ token, fetchImpl = fetch }) {
 }
 export const fetchIncomes = options => getArray({ ...options, endpoint: '/api/v1/supplier/incomes' });
 export const fetchSales = options => getArray({ ...options, endpoint: '/api/v1/supplier/sales' });
+
+export async function fetchGoodsReturns({ token, dateFrom, dateTo, fetchImpl = fetch }) {
+  if (!token) throw new Error('Не задана переменная WB_API_TOKEN');
+  validDate(dateFrom); validDate(dateTo);
+  const url = new URL('https://seller-analytics-api.wildberries.ru/api/v1/analytics/goods-return');
+  url.searchParams.set('dateFrom', dateFrom); url.searchParams.set('dateTo', dateTo);
+  const response = await fetchImpl(url, { headers: { Authorization: token, Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`WB API возвратов вернул HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!Array.isArray(payload?.report)) throw new Error('WB API возвратов вернул неожиданный формат');
+  return payload.report;
+}
+
+export async function fetchSupplies({ token, dateFrom, dateTo, fetchImpl = fetch }) {
+  if (!token) throw new Error('Не задана переменная WB_API_TOKEN');
+  const result = [], limit = 1000;
+  for (let offset = 0; offset < 100000; offset += limit) {
+    const url = new URL('https://supplies-api.wildberries.ru/api/v1/supplies');
+    url.searchParams.set('limit', String(limit)); url.searchParams.set('offset', String(offset));
+    const response = await fetchImpl(url, { method: 'POST', headers: { Authorization: token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dates: [{ from: dateFrom, till: dateTo, type: 'factDate' }], statusIDs: [5, 6] }) });
+    if (!response.ok) throw new Error(`WB API поставок вернул HTTP ${response.status}`);
+    const rows = await response.json();
+    if (!Array.isArray(rows)) throw new Error('WB API поставок вернул неожиданный формат');
+    result.push(...rows);
+    if (rows.length < limit) return result;
+  }
+  throw new Error('Превышен безопасный лимит поставок');
+}
+
+export async function fetchSupplyGoods({ token, supplyId, fetchImpl = fetch }) {
+  const result = [], limit = 1000;
+  for (let offset = 0; offset < 100000; offset += limit) {
+    const url = new URL(`https://supplies-api.wildberries.ru/api/v1/supplies/${encodeURIComponent(supplyId)}/goods`);
+    url.searchParams.set('limit', String(limit)); url.searchParams.set('offset', String(offset));
+    const response = await fetchImpl(url, { headers: { Authorization: token, Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`WB API товаров поставки ${supplyId} вернул HTTP ${response.status}`);
+    const rows = await response.json(); if (!Array.isArray(rows)) throw new Error('WB API товаров поставки вернул неожиданный формат');
+    result.push(...rows); if (rows.length < limit) return result;
+  }
+  throw new Error('Превышен безопасный лимит товаров поставки');
+}

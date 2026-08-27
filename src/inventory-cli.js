@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { fetchIncomes, fetchSales, fetchStocks } from './wb-api.js';
-import { aggregateMovements, aggregateStocks, reconcileInventory } from './inventory.js';
+import { fetchFinancialReport, fetchGoodsReturns, fetchIncomes, fetchSales, fetchStocks, fetchSupplies } from './wb-api.js';
+import { aggregateMovements, aggregateStocks, classifyFindings, reconcileInventory } from './inventory.js';
 
 const token = process.env.WB_API_TOKEN;
 const dataDir = path.resolve('.wb-data');
@@ -23,19 +23,30 @@ try {
   const stockRows = await fetchStocks({ token });
   const stocks = aggregateStocks(stockRows);
   if (!previous) {
-    await saveAtomic({ version: 1, capturedAt: nowIso, stocks });
+    await saveAtomic({ version: 2, capturedAt: nowIso, stocks, candidates: {} });
     console.log(`Создан базовый снимок: ${Object.keys(stocks).length} артикулов. Для сверки запустите снова завтра.`);
   } else {
     const from = previous.capturedAt;
-    const [incomes, sales] = await Promise.all([fetchIncomes({ token, dateFrom: from }), fetchSales({ token, dateFrom: from })]);
-    const movements = aggregateMovements(incomes, sales);
+    const dateFrom = from.slice(0, 10), dateTo = nowIso.slice(0, 10);
+    const [incomes, sales, goodsReturns, finance] = await Promise.all([
+      fetchIncomes({ token, dateFrom: from }), fetchSales({ token, dateFrom: from }),
+      fetchGoodsReturns({ token, dateFrom, dateTo }), fetchFinancialReport({ token, dateFrom, dateTo })
+    ]);
+    let supplyAccess = 'unavailable';
+    try { await fetchSupplies({ token, dateFrom, dateTo }); supplyAccess = 'available'; }
+    catch (error) { supplyAccess = error.message; }
+    const movements = aggregateMovements(incomes, sales, goodsReturns);
     const findings = reconcileInventory(previous.stocks, stocks, movements);
-    const audit = { version: 1, from, to: nowIso, findings };
+    const compensation = new Set(finance.filter(row => Number(row.additional_payment) > 0 || /компенсац/i.test(String(row.supplier_oper_name))).map(row => String(row.nm_id)));
+    for (const finding of findings) finding.compensated = compensation.has(finding.nmId);
+    const coverage = { stocks: true, incomes: true, sales: true, sellerReturns: true, finance: true, detailedSupplies: false };
+    const classified = classifyFindings(findings, previous.candidates, now, coverage);
+    const audit = { version: 2, from, to: nowIso, coverage, supplyAccess, findings: classified.classified };
     await mkdir(path.join(dataDir, 'audits'), { recursive: true });
     await writeFile(path.join(dataDir, 'audits', `${nowIso.replace(/[:.]/g, '-')}.json`), `${JSON.stringify(audit, null, 2)}\n`, 'utf8');
-    await saveAtomic({ version: 1, capturedAt: nowIso, stocks });
+    await saveAtomic({ version: 2, capturedAt: nowIso, stocks, candidates: classified.active });
     console.log(`Артикулов: ${Object.keys(stocks).length}; кандидатов на расхождение: ${findings.length}`);
-    for (const item of findings.slice(0, 20)) console.log(`nmID ${item.nmId}: возможно отсутствует ${item.missing} шт. (ожидалось ${item.expected}, есть ${item.actual})`);
+    for (const item of classified.classified.slice(0, 20)) console.log(`nmID ${item.nmId}: ${item.status}; возможно отсутствует ${item.missing} шт.; блокеры: ${item.blockers.join(', ') || 'нет'}`);
     console.log('Результат является сигналом для проверки, а не доказанной претензией: перемещения и задержки WB могут создавать временные расхождения.');
   }
 } catch (error) {
