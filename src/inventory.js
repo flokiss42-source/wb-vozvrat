@@ -12,6 +12,23 @@ export function aggregateStocks(rows) {
   return Object.fromEntries([...result.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
+export function aggregateStockLocations(rows) {
+  const result = {};
+  for (const row of rows) {
+    const nmId = keyOf(row); if (!nmId) continue;
+    const warehouseId = String(row.warehouseId ?? row.warehouseID ?? row.warehouseName ?? 'unknown');
+    const warehouseName = String(row.warehouseName ?? warehouseId);
+    const quantity = number(row.quantity) + number(row.inWayToClient) + number(row.inWayFromClient);
+    const key = `${warehouseId}:${nmId}`;
+    if (!result[key]) result[key] = { warehouseId, warehouseName, nmId, quantity: 0, available: 0, inWayToClient: 0, inWayFromClient: 0 };
+    result[key].quantity += quantity;
+    result[key].available += number(row.quantity);
+    result[key].inWayToClient += number(row.inWayToClient);
+    result[key].inWayFromClient += number(row.inWayFromClient);
+  }
+  return result;
+}
+
 export function aggregateMovements(incomes, sales, goodsReturns = []) {
   const accepted = new Map(), sold = new Map(), returned = new Map(), sellerReturned = new Map(), returnInProgress = new Map();
   const incomeSeen = new Set(), saleSeen = new Set();
