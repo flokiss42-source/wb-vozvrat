@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchFinancialReport } from '../src/wb-api.js';
+import { fetchFinancialReport, fetchStocks } from '../src/wb-api.js';
 
 const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body });
 
@@ -24,4 +24,13 @@ test('проверяет токен и даты до сетевого запро
   await assert.rejects(fetchFinancialReport({ token: '', dateFrom: '2026-08-01', dateTo: '2026-08-02' }), /WB_API_TOKEN/);
   await assert.rejects(fetchFinancialReport({ token: 'x', dateFrom: '2026-99-01', dateTo: '2026-08-02' }), /Некорректная дату|Некорректная дата/);
   await assert.rejects(fetchFinancialReport({ token: 'x', dateFrom: '2026-08-03', dateTo: '2026-08-02' }), /позже/);
+});
+
+test('читает вложенный формат актуального API остатков', async () => {
+  const rows = await fetchStocks({ token: 'x', fetchImpl: async (url, options) => {
+    assert.match(String(url), /stocks-report\/wb-warehouses/); assert.equal(options.method, 'POST');
+    return response({ data: { items: [{ nmId: 1, quantity: 2 }] } });
+  }});
+  assert.deepEqual(rows, [{ nmId: 1, quantity: 2 }]);
+  await assert.rejects(fetchStocks({ token: 'x', fetchImpl: async () => response({ data: {} }) }), /неожиданный формат/);
 });

@@ -35,3 +35,29 @@ export async function fetchFinancialReport({ token, dateFrom, dateTo, fetchImpl 
   }
   throw new Error(`Превышен безопасный лимит страниц (${maxPages})`);
 }
+
+async function getArray({ token, endpoint, dateFrom, fetchImpl = fetch }) {
+  if (!token) throw new Error('Не задана переменная WB_API_TOKEN');
+  const url = new URL(`https://statistics-api.wildberries.ru${endpoint}`);
+  url.searchParams.set('dateFrom', dateFrom);
+  const response = await fetchImpl(url, { headers: { Authorization: token, Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`WB API ${endpoint} вернул HTTP ${response.status}`);
+  const data = await response.json();
+  if (!Array.isArray(data)) throw new Error(`WB API ${endpoint} вернул неожиданный формат`);
+  return data;
+}
+
+export async function fetchStocks({ token, fetchImpl = fetch }) {
+  if (!token) throw new Error('Не задана переменная WB_API_TOKEN');
+  const response = await fetchImpl('https://seller-analytics-api.wildberries.ru/api/analytics/v1/stocks-report/wb-warehouses', {
+    method: 'POST', headers: { Authorization: token, Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: '{}', signal: AbortSignal.timeout(60000)
+  });
+  if (!response.ok) throw new Error(`WB API текущих остатков вернул HTTP ${response.status}`);
+  const payload = await response.json();
+  const rows = payload?.data?.items;
+  if (!Array.isArray(rows)) throw new Error('WB API текущих остатков вернул неожиданный формат');
+  return rows;
+}
+export const fetchIncomes = options => getArray({ ...options, endpoint: '/api/v1/supplier/incomes' });
+export const fetchSales = options => getArray({ ...options, endpoint: '/api/v1/supplier/sales' });
