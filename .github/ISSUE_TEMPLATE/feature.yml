@@ -1,0 +1,18 @@
+name: Предложение
+description: Предложить проверку, источник данных или улучшение
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему продавца решает предложение?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Источник и проверяемое правило
+      description: Приложите ссылку на официальную документацию WB и опишите, как исключить ложные срабатывания.
+    validations:
+      required: true
