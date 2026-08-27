@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { aggregateMovements, aggregateStocks, classifyFindings, reconcileInventory } from '../src/inventory.js';
+import { aggregateDetailedSupplies, aggregateMovements, aggregateStocks, applyCompensations, classifyFindings, reconcileInventory } from '../src/inventory.js';
 
 test('агрегирует полный остаток по артикулу и складам', () => {
   assert.deepEqual(aggregateStocks([
@@ -17,6 +17,30 @@ test('считает уникальные приёмки, продажи и во
     { nmId: 10, srid: 'return', saleID: 'R1', forPay: -10 }
   ]);
   assert.deepEqual(result, { accepted: { 10: 5 }, sold: { 10: 1 }, returned: { 10: 1 }, sellerReturned: {}, returnInProgress: {} });
+});
+
+test('не склеивает продажу и возврат с одинаковым srid', () => {
+  const movements = aggregateMovements([], [
+    { nmId: 10, srid: 'same', saleID: 'S1', forPay: 100 },
+    { nmId: 10, srid: 'same', saleID: 'R1', forPay: -100 }
+  ]);
+  assert.equal(movements.sold[10], 1); assert.equal(movements.returned[10], 1);
+});
+
+test('использует принятое количество детальных FBW-поставок', () => {
+  const result = aggregateDetailedSupplies([
+    { supplyID: 1, statusID: 5, goods: [{ nmID: 10, acceptedQuantity: 4, barcode: 'a' }] },
+    { supplyID: 2, statusID: 6, goods: [{ nmID: 10, acceptedQuantity: 9 }] }
+  ]);
+  assert.deepEqual(result.accepted, { 10: 4 }); assert.equal(result.evidence[10][0].supplyID, 1); assert.equal(result.pending.length, 1);
+});
+
+test('вычитает только предметные компенсации в единицах', () => {
+  const result = applyCompensations([{ nmId: '10', missing: 3 }], [
+    { nm_id: 10, supplier_oper_name: 'Компенсация потерянного товара', quantity: 1, rrd_id: 7 },
+    { nm_id: 10, supplier_oper_name: 'Доплата', quantity: 50 }
+  ]);
+  assert.equal(result[0].compensatedUnits, 1); assert.equal(result[0].unresolvedMissing, 2); assert.equal(result[0].compensationEvidence[0].rrdId, 7);
 });
 
 test('находит только отрицательные расхождения товарного баланса', () => {
@@ -40,4 +64,7 @@ test('не разрешает претензию без срока и полно
   const full = classifyFindings([finding], { 10: { firstSeen } }, new Date('2026-08-20T00:00:00Z'),
     { stocks: true, incomes: true, sales: true, sellerReturns: true, finance: true, detailedSupplies: true });
   assert.equal(full.classified[0].status, 'Готово к претензии'); assert.deepEqual(full.classified[0].blockers, []);
+  const pending = classifyFindings([{ ...finding, pendingSupply: true }], { 10: { firstSeen } }, new Date('2026-08-20T00:00:00Z'),
+    { stocks: true, incomes: true, sales: true, sellerReturns: true, finance: true, detailedSupplies: true });
+  assert.equal(pending.classified[0].status, 'Вероятная потеря'); assert.match(pending.classified[0].blockers[0], /не завершена/);
 });

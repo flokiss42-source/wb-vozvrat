@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { fetchFinancialReport, fetchGoodsReturns, fetchIncomes, fetchSales, fetchStocks, fetchSupplies } from './wb-api.js';
-import { aggregateMovements, aggregateStocks, classifyFindings, reconcileInventory } from './inventory.js';
+import { fetchDetailedSupplies, fetchFinancialReport, fetchGoodsReturns, fetchIncomes, fetchSales, fetchStocks } from './wb-api.js';
+import { aggregateDetailedSupplies, aggregateMovements, aggregateStocks, applyCompensations, classifyFindings, reconcileInventory } from './inventory.js';
 
 const token = process.env.WB_API_TOKEN;
 const dataDir = path.resolve('.wb-data');
@@ -32,14 +32,19 @@ try {
       fetchIncomes({ token, dateFrom: from }), fetchSales({ token, dateFrom: from }),
       fetchGoodsReturns({ token, dateFrom, dateTo }), fetchFinancialReport({ token, dateFrom, dateTo })
     ]);
-    let supplyAccess = 'unavailable';
-    try { await fetchSupplies({ token, dateFrom, dateTo }); supplyAccess = 'available'; }
+    let supplyAccess = 'unavailable', detailedSupplies = null;
+    try { detailedSupplies = aggregateDetailedSupplies(await fetchDetailedSupplies({ token, dateFrom, dateTo })); supplyAccess = 'available'; }
     catch (error) { supplyAccess = error.message; }
     const movements = aggregateMovements(incomes, sales, goodsReturns);
-    const findings = reconcileInventory(previous.stocks, stocks, movements);
-    const compensation = new Set(finance.filter(row => Number(row.additional_payment) > 0 || /компенсац/i.test(String(row.supplier_oper_name))).map(row => String(row.nm_id)));
-    for (const finding of findings) finding.compensated = compensation.has(finding.nmId);
-    const coverage = { stocks: true, incomes: true, sales: true, sellerReturns: true, finance: true, detailedSupplies: false };
+    if (detailedSupplies) movements.accepted = detailedSupplies.accepted;
+    let findings = reconcileInventory(previous.stocks, stocks, movements);
+    findings = applyCompensations(findings, finance);
+    const pendingNmIds = new Set((detailedSupplies?.pending ?? []).flatMap(supply => (supply.goods ?? []).map(row => String(row.nmID ?? row.nmId))));
+    for (const finding of findings) {
+      finding.supplyEvidence = detailedSupplies?.evidence[finding.nmId] ?? [];
+      finding.pendingSupply = pendingNmIds.has(finding.nmId);
+    }
+    const coverage = { stocks: true, incomes: true, sales: true, sellerReturns: true, finance: true, detailedSupplies: Boolean(detailedSupplies) };
     const classified = classifyFindings(findings, previous.candidates, now, coverage);
     const audit = { version: 2, from, to: nowIso, coverage, supplyAccess, findings: classified.classified };
     await mkdir(path.join(dataDir, 'audits'), { recursive: true });

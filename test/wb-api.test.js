@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchFinancialReport, fetchGoodsReturns, fetchStocks, fetchSupplies, fetchSupplyGoods } from '../src/wb-api.js';
+import { fetchDetailedSupplies, fetchFinancialReport, fetchGoodsReturns, fetchStocks, fetchSupplies, fetchSupplyGoods } from '../src/wb-api.js';
 
 const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body });
 
@@ -42,4 +42,13 @@ test('читает возвраты продавцу и поставки с па
   assert.deepEqual(supplies, [{ supplyID: 1 }]);
   const goods = await fetchSupplyGoods({ token: 'x', supplyId: 1, fetchImpl: async () => response([{ nmID: 2 }]) });
   assert.deepEqual(goods, [{ nmID: 2 }]);
+});
+
+test('получает товары каждой поставки с контролем частоты', async () => {
+  let waits = 0;
+  const detailed = await fetchDetailedSupplies({ token: 'x', dateFrom: '2026-08-01', dateTo: '2026-08-02', wait: async () => { waits++; }, fetchImpl: async (url) => {
+    if (String(url).endsWith('/api/v1/supplies?limit=1000&offset=0')) return response([{ supplyID: 1 }, { supplyID: 2 }]);
+    return response([{ nmID: String(url).includes('/1/') ? 10 : 20, acceptedQuantity: 1 }]);
+  }});
+  assert.equal(detailed.length, 2); assert.equal(detailed[1].goods[0].nmID, 20); assert.equal(waits, 1);
 });

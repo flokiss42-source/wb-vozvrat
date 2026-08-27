@@ -1,5 +1,5 @@
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-const keyOf = row => String(row.nmId ?? row.nm_id ?? '');
+const keyOf = row => String(row.nmId ?? row.nmID ?? row.nm_id ?? '');
 
 function add(map, key, amount) {
   if (!key) return;
@@ -22,7 +22,9 @@ export function aggregateMovements(incomes, sales, goodsReturns = []) {
     incomeSeen.add(fingerprint); add(accepted, keyOf(row), row.quantity);
   }
   for (const row of sales) {
-    const fingerprint = String(row.srid ?? row.saleID ?? `${keyOf(row)}|${row.date}|${row.lastChangeDate}`);
+    // A sale and its later return share srid, but have different saleID values.
+    // Prefer saleID so both sides of the lifecycle remain in the ledger.
+    const fingerprint = String(row.saleID ?? `${row.srid}|${keyOf(row)}|${row.date}|${row.lastChangeDate}`);
     if (saleSeen.has(fingerprint)) continue;
     saleSeen.add(fingerprint);
     const isReturn = /^R/i.test(String(row.saleID ?? '')) || number(row.forPay) < 0;
@@ -38,6 +40,37 @@ export function aggregateMovements(incomes, sales, goodsReturns = []) {
   }
   return { accepted: Object.fromEntries(accepted), sold: Object.fromEntries(sold), returned: Object.fromEntries(returned),
     sellerReturned: Object.fromEntries(sellerReturned), returnInProgress: Object.fromEntries(returnInProgress) };
+}
+
+export function aggregateDetailedSupplies(supplies) {
+  const accepted = new Map(), evidence = new Map(), pending = [];
+  for (const supply of supplies) {
+    if (supply.statusID !== 5) { pending.push({ supplyID: supply.supplyID, statusID: supply.statusID, goods: supply.goods ?? [] }); continue; }
+    for (const row of supply.goods ?? []) {
+      const nmId = keyOf(row), quantity = number(row.acceptedQuantity);
+      add(accepted, nmId, quantity);
+      if (!evidence.has(nmId)) evidence.set(nmId, []);
+      evidence.get(nmId).push({ supplyID: supply.supplyID, acceptedQuantity: quantity, barcode: row.barcode });
+    }
+  }
+  return { accepted: Object.fromEntries(accepted), evidence: Object.fromEntries(evidence), pending };
+}
+
+export function applyCompensations(findings, financeRows) {
+  const units = new Map(), evidence = new Map();
+  for (const row of financeRows) {
+    const operation = String(row.supplier_oper_name ?? '');
+    if (!/компенсац|утрат|подмен|брак|недокомплект/i.test(operation)) continue;
+    const nmId = String(row.nm_id ?? ''); if (!nmId) continue;
+    const quantity = Math.max(1, Math.abs(number(row.quantity)));
+    add(units, nmId, quantity);
+    if (!evidence.has(nmId)) evidence.set(nmId, []);
+    evidence.get(nmId).push({ rrdId: row.rrd_id, operation, quantity, amount: number(row.additional_payment) || number(row.ppvz_for_pay) });
+  }
+  return findings.map(finding => {
+    const compensatedUnits = Math.min(finding.missing, units.get(finding.nmId) ?? 0);
+    return { ...finding, compensatedUnits, unresolvedMissing: Math.max(0, finding.missing - compensatedUnits), compensationEvidence: evidence.get(finding.nmId) ?? [] };
+  }).filter(finding => finding.unresolvedMissing > 0);
 }
 
 export function reconcileInventory(previous, current, movements, { minMissing = 1 } = {}) {
@@ -63,8 +96,9 @@ export function classifyFindings(findings, previousCandidates = {}, now = new Da
     const blockers = [];
     for (const source of ['stocks', 'incomes', 'sales', 'sellerReturns', 'finance']) if (!coverage[source]) blockers.push(`нет данных: ${source}`);
     if (!coverage.detailedSupplies) blockers.push('нет детализации поставок');
+    if (finding.pendingSupply) blockers.push('поставка ещё не завершена');
     if (finding.returnInProgress) blockers.push(`возврат в пути: ${finding.returnInProgress} шт.`);
-    if (finding.compensated) blockers.push('найдена компенсация');
+    if (finding.compensatedUnits) blockers.push(`компенсировано: ${finding.compensatedUnits} шт.`);
     let status = 'Наблюдение';
     if (ageDays >= 7 && !finding.returnInProgress) status = 'Вероятная потеря';
     if (ageDays >= 14 && blockers.length === 0) status = 'Готово к претензии';

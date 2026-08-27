@@ -103,3 +103,16 @@ export async function fetchSupplyGoods({ token, supplyId, fetchImpl = fetch }) {
   }
   throw new Error('Превышен безопасный лимит товаров поставки');
 }
+
+export async function fetchDetailedSupplies({ token, dateFrom, dateTo, fetchImpl = fetch, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  const supplies = await fetchSupplies({ token, dateFrom, dateTo, fetchImpl });
+  const detailed = [];
+  for (let index = 0; index < supplies.length; index++) {
+    const supply = supplies[index];
+    if (!supply.supplyID) { detailed.push({ ...supply, goods: [] }); continue; }
+    if (index > 0) await wait(2100); // documented limit: 30 requests/minute
+    const goods = await fetchSupplyGoods({ token, supplyId: supply.supplyID, fetchImpl });
+    detailed.push({ ...supply, goods });
+  }
+  return detailed;
+}
